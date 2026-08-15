@@ -1,0 +1,6 @@
+# dsh bundle layer: mount the token-billing plugin.
+# Host half (lib/index.js) registers the `tokenBilling` session projection;
+# the browser half (lib/client.js) is picked up via exports["./client"].
+- insert:
+    - id: token-billing
+      name: dsh-token-billing

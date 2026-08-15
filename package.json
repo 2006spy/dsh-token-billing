@@ -1,0 +1,31 @@
+{
+  "name": "dsh-token-billing",
+  "version": "0.4.0",
+  "description": "DSH 实时 token 计费插件：DeepSeek 官网中文页人民币价格直接计费（高峰/错峰按北京时间窗口）、价格自动跟随官网实时更新、可视化自定义模型价格、自定义 JSON 价格端点",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./projection": "./lib/projection.js",
+    "./prices": "./lib/prices.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "slots",
+        "settingsScope"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT"
+}
