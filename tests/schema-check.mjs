@@ -90,6 +90,7 @@ const viewSchema = z.object({
     step: z.number().int().nonnegative(),
     model: z.string(),
     provider: z.string(),
+    at: z.number(),
     uncachedInputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     cacheReadTokens: z.number().int().nonnegative(),
