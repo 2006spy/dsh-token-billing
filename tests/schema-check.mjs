@@ -34,6 +34,15 @@ const viewSchema = z.object({
     cacheWrite: z.number().nonnegative(),
     currency: z.string(),
   }).strict()),
+  providerPrices: z.array(z.object({
+    provider: z.string(),
+    model: z.string(),
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+    cacheRead: z.number().nonnegative(),
+    cacheWrite: z.number().nonnegative(),
+    currency: z.string(),
+  }).strict()),
   totals: z.object({
     uncachedInputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
