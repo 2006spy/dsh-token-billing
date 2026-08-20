@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-billing",
-  "version": "0.5.0",
-  "description": "DSH 实时 token 计费插件：DeepSeek 官网人民币价直接计费（高峰/错峰按北京时间窗口）、价格自动跟随官网、可视化自定义模型价格、持久化历史账本、账户余额、CSV/JSON 导出、本地模型节省统计",
+  "version": "0.6.0",
+  "description": "DSH 实时 token 计费插件：DeepSeek 官网人民币价直接计费（高峰/错峰按北京时间窗口）、价格自动跟随官网、可视化自定义模型价格、持久化历史账本、账户余额、CSV/JSON 导出、本地模型节省统计、订阅/免费/本地收费形式分类、Token 缓存命中统计",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

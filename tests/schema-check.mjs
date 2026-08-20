@@ -107,6 +107,7 @@ const viewSchema = z.object({
     cost: z.number().nonnegative(),
     currency: z.string(),
     estimated: z.boolean(),
+    mode: z.string().optional(),
   }).strict()),
 }).strict()
 

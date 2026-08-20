@@ -10,6 +10,7 @@ import {
   costOf,
   priceAt,
   inWindow,
+  providerModeOf,
   BUILTIN_PRICES,
 } from '../lib/projection.js'
 import { parseDeepSeekPricingHtml, fetchJsonPrices, parsePriceNumber, toMinutes, currencySymbol } from '../lib/prices.js'
@@ -380,6 +381,34 @@ console.log('== 16. 高峰/错峰生效时刻自动切换（无需重抓官网�
   check('生效后自动切高峰价 ¥9', Math.abs(specAfter.prices['deepseek-v4-flash'].output - 9) < 1e-9, specAfter.prices['deepseek-v4-flash'])
   check('生效后高峰表就位', Math.abs(specAfter.peak.prices['deepseek-v4-flash'].output - 9) < 1e-9)
   check('生效后空闲价就位', Math.abs(specAfter.peak.offPeakPrices['deepseek-v4-flash'].output - 4.5) < 1e-9)
+}
+
+console.log('== 17. provider 收费形式（metering：订阅/免费/本地） ==')
+{
+  // 配置解析
+  const spec = resolveBillingSpec({ providerModes: '{"opencode-go":"subscription","local*":"local","*free*":"free"}' })
+  check('providerModes 解析数量', spec.providerModes.length === 3)
+  check('精确匹配', providerModeOf(spec, 'opencode-go') === 'subscription')
+  check('glob 匹配', providerModeOf(spec, 'local-ollama') === 'local')
+  check('glob 匹配 free', providerModeOf(spec, 'somefree-provider') === 'free')
+  check('未匹配默认 usage', providerModeOf(spec, 'myapi') === 'usage')
+  check('空 provider 默认 usage', providerModeOf(spec, '') === 'usage')
+  check('非法模式抛错', (() => { try { resolveBillingSpec({ providerModes: '{"x":"bogus"}' }); return false } catch { return true } })())
+  check('坏 JSON 抛错', (() => { try { resolveBillingSpec({ providerModes: '{bad' }); return false } catch { return true } })())
+
+  // 投影结算：step 带 mode
+  const parts = createTokenBillingProjectionParts(spec)
+  let state = parts.init()
+  state = parts.apply(state, ev('turn/start', { turn: 1 }, { seq: 1 }))
+  state = parts.apply(state, ev('request/header', { header: { config: { provider: 'opencode-go', model: 'deepseek-v4-flash' }, system: 'sys' }, reason: 'initial' }, { seq: 2 }))
+  state = parts.apply(state, ev('step/start', { turn: 1, step: 0 }, { seq: 3 }))
+  state = parts.apply(state, ev('assistant/chunk', { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'abc' } }, { seq: 4 }))
+  state = parts.apply(state, ev('assistant/message', { turn: 1, step: 0, message: { role: 'assistant', content: [] }, usage: { inputTokens: 100, outputTokens: 20 } }, { surfaceOp: 'append', seq: 5 }))
+  state = parts.apply(state, ev('step/end', { turn: 1, step: 0 }, { seq: 6 }))
+  state = parts.apply(state, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, { seq: 7 }))
+  const view = parts.view(state)
+  check('结算 step 带 mode=subscription', view.steps.length === 1 && view.steps[0].mode === 'subscription', view.steps[0])
+  check('结算 step 仍计 cost（名义）', view.steps[0].cost > 0)
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`)

@@ -4,11 +4,11 @@
 
 **DeepSeek Harness (dsh) 实时 token 计费插件** · Real-time token billing for DSH
 
-官网人民币价直接计费 · 高峰/错峰自动切换 · 价格实时跟随官网 · 可视化自定义模型价格
+官网人民币价直接计费 · 高峰/错峰自动切换 · 价格实时跟随官网 · 可视化自定义模型价格 · 订阅/免费/本地收费形式分类
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-8A2BE2.svg)](https://github.com/topics/dsh-plugin)
-[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.6.0-green.svg)](package.json)
 
 </div>
 
@@ -100,6 +100,25 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 配置 `localProviders`（如 `local*`）与 `localCostPerM`（实际成本，默认 0 = 免费）后，
 本地（自托管）模型调用按官方价计**名义价值** - 实际成本 = **已节省**，统计卡实时显示。
 
+### Provider 收费形式（v0.6，参考 dsh-web-billing）
+配置 `providerModes`（JSON，如 `{"opencode-go":"subscription","local*":"local","*free*":"free"}`）后，
+订阅制 / 免费 / 本地 provider 的调用**实际花费按 0 计**，官方名义价折算为「节省/回本」：
+
+| 模式 | 说明 |
+| --- | --- |
+| `usage` | 按量：按官方/配置价实算花费（默认） |
+| `subscription` | 订阅（如 opencode-go $10/月）：实际花费 0，名义价值计「回本」 |
+| `free` | 活动免费：实际花费 0（真正白嫖） |
+| `local` | 本地部署：实际花费 0（或按 `localCostPerM`），省的是 API 钱 |
+
+- 支持 glob 匹配（`local*` / `*free*`）；精确匹配优先于 glob
+- 统计卡「按 provider」按此分类显示实际花费 / 名义价值 / 节省（徽标着色：按量灰 / 订阅紫 / 免费天蓝 / 本地绿）
+- **历史重估**：配置后，账本中未带 mode 的旧记录按当前配置重新分类统计，无需改账本
+- 每条结算 step 会把当时的收费形式（mode）持久化进账本，导出 CSV/JSON 可见
+
+### Token 用量与缓存命中统计（v0.6）
+统计卡新增「Token 用量与缓存命中」：未缓存输入 / 缓存读 / 缓存写 / 输出 / 总 Token / 缓存命中率。
+
 ---
 
 ## ⚙️ 配置
@@ -116,6 +135,7 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 | 模型价格覆盖 | `{}` | **可视化编辑器**：逐格填「模型 ID + 输入/输出/缓存读/缓存写/币种」，可增删行；也可直接写 JSON `{ "deepseek-chat": {"input":2,"output":8} }`；优先级最高，不参与高峰/错峰 |
 | 本地模型提供方（glob） | — | 本地/自托管 provider 名单（如 `local*`），按官方价计名义价值；逗号分隔 |
 | 本地模型实际单价 | `0` | 本地模型每 1M token 实际成本（默认 0 = 免费，可填电费/算力成本）；名义价值 − 实际成本 = 已节省 |
+| Provider 收费形式（JSON） | `{}` | 如 `{"opencode-go":"subscription","local*":"local","*free*":"free"}`；订阅/免费/本地按 0 实付、名义价计节省（见上） |
 
 ### 价格来源
 
@@ -148,11 +168,13 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 - **价格抓取状态**：来源、最近更新时间、覆盖模型数、高峰/错峰窗口与生效时刻；「立即刷新价格」按钮手动抓取并重建投影。
 - **当前生效单价表**：列出所有模型当前生效价（含高峰/错峰，按此刻计价），切换模型/时段变化后实时刷新。
 
-### 统计（历史账本 · 余额 · 导出 · 节省）
+### 统计（历史账本 · 余额 · 导出 · 节省 · 收费形式 · 缓存命中）
 
 - **费用汇总**：今日 / 本月 / 累计（多币种，本地时区）
 - **账户余额**：官方余额实时显示（需 `DEEPSEEK_API_KEY`）
 - **按模型 / 按天**：历史明细（按天最近 14 天）
+- **按 provider**：每个 provider 的实际花费 / 名义价值 / 节省与收费形式徽标（按量灰 / 订阅紫 / 免费天蓝 / 本地绿）
+- **Token 用量与缓存命中**：未缓存输入 / 缓存读 / 缓存写 / 输出 / 总 Token / 缓存命中率
 - **本地模型节省**：已节省 / 名义价值 / 实际成本
 - **导出**：CSV / JSON 一键下载账本
 
@@ -182,6 +204,7 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 - `assistant/message` 或 `usage` chunk 携带精确用量时，该步立即换成精确值
 - 结算时刻（step/end）决定该步落在高峰还是空闲；用户覆盖的价格不参与高峰/错峰
 - 非 `completed` 结束（abort/error）的估算步骤自动退款，不计入总计
+- **收费形式**：`providerModes` 配置的订阅/免费/本地 provider，结算仍按名义价记入账本（含 mode 字段），统计层把实际花费归 0、名义价值计入节省/回本；未配置时全部按 `usage` 按量计
 - **实时跟随官网**：价格表默认每小时自动重抓（可配置）；峰谷价在生效时刻到达后 1 分钟内自动切换，无需重启
 
 ---
