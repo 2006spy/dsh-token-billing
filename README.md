@@ -29,6 +29,18 @@
 
 ---
 
+## 📸 界面一览
+
+**统计页仪表盘（v0.7 · 纯手写 SVG 图表 · 模拟数据渲染）**：
+
+![统计页仪表盘](docs/screenshots/stats-dashboard.png)
+
+图中可见：KPI 概览卡（今日 / 昨日环比 / 本月·预算环 / 累计 / 调用次数）· 费用趋势折线图 · 按模型费用占比环形图 · Token 用量趋势折线图 · 按 Provider 实际花费占比环形图 · 月度预算进度条 · 账户余额 · 按模型 / 按天明细。
+
+> 截图由 `scripts/render-preview.mjs` 用模拟账本数据生成；真实界面随实际账本数据展示。
+
+---
+
 ## 🚀 安装
 
 ### 方式一：DSH 插件市场（推荐，待上架）
@@ -250,6 +262,8 @@ node tests/bundle-smoke.mjs  # 浏览器 bundle：工厂执行 + 依赖契约（
 | `lib/client.js` | 浏览器端：费用行 + 设置卡片 + 统计仪表盘（手写 SVG 图表，`__ModuleLoader__` bundle） |
 | `cordis.patch.yml` | bundle 层挂载行 |
 | `scripts/render-preview.mjs` | 开发工具：生成统计页仪表盘预览 HTML |
+| `scripts/github-release.mjs` | 发版工具：从 `REPO_PAT` 读凭据创建 GitHub Release |
+| `docs/screenshots/` | 界面截图（统计页仪表盘） |
 | `tests/` | 验证脚本 + 官方页 fixture |
 
 ---
