@@ -106,6 +106,18 @@ const run = async () => {
   assert.equal(cs.output, 2000 + 100 + 300, '输出汇总')
   assert.equal(cs.calls, 3, 'cacheStats 调用数')
 
+  // 7b. perDay token 分桶 + days 键（供仪表盘趋势图 / 环比）
+  const dd = ms.perDay['2026-08-15']
+  assert.equal(dd.uncachedInput, 1000 + 500 + 800, 'perDay 未缓存输入分桶')
+  assert.equal(dd.output, 2000 + 100 + 300, 'perDay 输出分桶')
+  assert.equal(dd.cacheRead, 0, 'perDay 缓存读分桶')
+  assert.equal(dd.cacheWrite, 0, 'perDay 缓存写分桶')
+  assert.equal(dd.calls, 3, 'perDay 调用数')
+  assert.equal(ms.days.today, '2026-08-16', 'days.today 为本地时区键')
+  assert.equal(ms.days.yesterday, '2026-08-15', 'days.yesterday 为本地时区键')
+  // 8 月 15 日费用 = 1.0 + 0.5 + 0.3 = 1.8
+  assert.ok(Math.abs((ms.perDay['2026-08-15'].costs['¥'] ?? 0) - 1.8) < 1e-9, 'perDay 费用汇总')
+
   // 8. providerModes 配置重估：账本记录无 mode 时按配置生效
   const reLedger = emptyLedger()
   mergeSteps(reLedger, 'sess-r', [

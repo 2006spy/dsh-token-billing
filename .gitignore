@@ -3,6 +3,9 @@ node_modules/
 dist/
 *.log
 
+# 图表预览（开发工具产物：scripts/render-preview.mjs 生成）
+tests/preview.html
+
 # 价格缓存 / 运行时数据（不应入库）
 cache/
 *.cache.json

@@ -4,11 +4,11 @@
 
 **DeepSeek Harness (dsh) 实时 token 计费插件** · Real-time token billing for DSH
 
-官网人民币价直接计费 · 高峰/错峰自动切换 · 价格实时跟随官网 · 可视化自定义模型价格 · 订阅/免费/本地收费形式分类
+官网人民币价直接计费 · 高峰/错峰自动切换 · 价格实时跟随官网 · 可视化自定义模型价格 · 订阅/免费/本地收费形式分类 · 统计仪表盘（趋势折线图 + 占比环形图 + 预算预警）
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-8A2BE2.svg)](https://github.com/topics/dsh-plugin)
-[![Version](https://img.shields.io/badge/version-0.6.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.7.0-green.svg)](package.json)
 
 </div>
 
@@ -119,6 +119,17 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 ### Token 用量与缓存命中统计（v0.6）
 统计卡新增「Token 用量与缓存命中」：未缓存输入 / 缓存读 / 缓存写 / 输出 / 总 Token / 缓存命中率。
 
+### 统计仪表盘（v0.7，参考中转站 one-api / new-api 首页 + dsh-web-billing 费用页）
+统计页升级为**仪表盘**，纯手写 SVG 图表（零构建依赖，深浅主题自适应，hover 查看明细）：
+
+- **KPI 概览卡**：今日 / 昨日 / 本月 / 累计 / 调用次数；今日卡带 **vs 昨日环比**（▲ 红 = 花多了，▼ 绿 = 省了）；本月卡带**预算进度环**
+- **📈 费用趋势折线图**：近 14 天每日费用（面积渐变 + hover 竖线与明细 tooltip）
+- **📊 Token 用量趋势折线图**：近 14 天输入 / 输出 / 缓存读三条线 + 图例
+- **🍩 按模型费用占比环形图**：扇形占比 + 中心合计 + 图例（超 8 项自动合并「其他」）
+- **🍩 按 Provider 实际花费占比环形图**：按量实付分布；全为订阅/免费/本地时给出提示
+- **月度预算预警**：`monthlyBudget` 配置后显示进度条（绿 → 琥珀 → 红，超支红色高亮并显示超支金额）
+- 仪表盘顶部「↻ 刷新」一键重拉统计与余额；按天明细表新增每日 token 总量
+
 ---
 
 ## ⚙️ 配置
@@ -135,6 +146,7 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 | 模型价格覆盖 | `{}` | **可视化编辑器**：逐格填「模型 ID + 输入/输出/缓存读/缓存写/币种」，可增删行；也可直接写 JSON `{ "deepseek-chat": {"input":2,"output":8} }`；优先级最高，不参与高峰/错峰 |
 | 本地模型提供方（glob） | — | 本地/自托管 provider 名单（如 `local*`），按官方价计名义价值；逗号分隔 |
 | 本地模型实际单价 | `0` | 本地模型每 1M token 实际成本（默认 0 = 免费，可填电费/算力成本）；名义价值 − 实际成本 = 已节省 |
+| 月度预算（默认货币） | `0` | 0 = 不设预算；设置后统计页显示预算进度环与进度条预警（绿 → 琥珀 → 红，超支红色高亮） |
 | Provider 收费形式（JSON） | `{}` | 如 `{"opencode-go":"subscription","local*":"local","*free*":"free"}`；订阅/免费/本地按 0 实付、名义价计节省（见上） |
 
 ### 价格来源
@@ -168,11 +180,13 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 - **价格抓取状态**：来源、最近更新时间、覆盖模型数、高峰/错峰窗口与生效时刻；「立即刷新价格」按钮手动抓取并重建投影。
 - **当前生效单价表**：列出所有模型当前生效价（含高峰/错峰，按此刻计价），切换模型/时段变化后实时刷新。
 
-### 统计（历史账本 · 余额 · 导出 · 节省 · 收费形式 · 缓存命中）
+### 统计（仪表盘 · 历史账本 · 余额 · 导出 · 节省 · 收费形式 · 缓存命中）
 
+- **仪表盘概览**：KPI 卡（今日 / 昨日环比 / 本月·预算环 / 累计 / 调用次数）+ 近 14 天**费用趋势折线图** + **Token 用量趋势折线图** + **按模型 / 按 Provider 占比环形图**（hover 查看明细，详见上方 v0.7 一节）
+- **月度预算**：`monthlyBudget` 配置后显示进度条预警（超支红色高亮）
 - **费用汇总**：今日 / 本月 / 累计（多币种，本地时区）
 - **账户余额**：官方余额实时显示（需 `DEEPSEEK_API_KEY`）
-- **按模型 / 按天**：历史明细（按天最近 14 天）
+- **按模型 / 按天**：历史明细（按天最近 14 天，含每日 token 总量）
 - **按 provider**：每个 provider 的实际花费 / 名义价值 / 节省与收费形式徽标（按量灰 / 订阅紫 / 免费天蓝 / 本地绿）
 - **Token 用量与缓存命中**：未缓存输入 / 缓存读 / 缓存写 / 输出 / 总 Token / 缓存命中率
 - **本地模型节省**：已节省 / 名义价值 / 实际成本
@@ -212,12 +226,16 @@ git clone https://github.com/2006spy/dsh-token-billing.git
 ## ✅ 验证
 
 ```sh
-node tests/simulate.mjs      # 91 项：计价/估算/多币种/退款/中英文官网解析/峰谷时段/生效切换/折算/序列化
+node tests/simulate.mjs      # 101 项：计价/估算/多币种/退款/中英文官网解析/峰谷时段/生效切换/折算/序列化
 node tests/schema-check.mjs  # 视图 wire schema 校验（内置 + 官网高峰两场景）
-node tests/ledger-test.mjs   # 账本：幂等合并/统计/本地节省/CSV 导出
+node tests/ledger-test.mjs   # 账本：幂等合并/统计/本地节省/CSV 导出/perDay 分桶与 days 键
+node tests/bundle-smoke.mjs  # 浏览器 bundle：工厂执行 + 依赖契约（React shim）
 ```
 
 真实联网端到端（抓官方页 → 解析 → 高峰/错峰计价）已实测通过。
+
+> 开发预览：`node scripts/render-preview.mjs` 生成 `tests/preview.html`（内联 React + 模拟账本数据），
+> 用本地 Chrome 渲染统计页仪表盘截图，可快速核对图表效果（该文件已 gitignore，不入库）。
 
 ---
 
@@ -225,12 +243,13 @@ node tests/ledger-test.mjs   # 账本：幂等合并/统计/本地节省/CSV 导
 
 | 文件 | 说明 |
 | --- | --- |
-| `lib/index.js` | 宿主端：注册投影 + settings 命名空间 + 价格抓取/缓存管理 + 账本/余额/导出路由 |
+| `lib/index.js` | 宿主端：注册投影 + settings 命名空间 + 价格抓取/缓存管理 + 账本/余额/导出/统计路由 |
 | `lib/projection.js` | 纯计费数学与投影状态机（零依赖，可独立测试） |
 | `lib/prices.js` | 价格源：DeepSeek 官方页解析 / 自定义 JSON / 缓存 / 币种符号映射 |
-| `lib/ledger.js` | 持久化账本：幂等合并 / 多维统计 / 本地节省 / CSV·JSON 导出 |
-| `lib/client.js` | 浏览器端：费用行 + 设置卡片（手写 `__ModuleLoader__` bundle） |
+| `lib/ledger.js` | 持久化账本：幂等合并 / 多维统计（含 perDay token 分桶、days 键）/ 本地节省 / CSV·JSON 导出 |
+| `lib/client.js` | 浏览器端：费用行 + 设置卡片 + 统计仪表盘（手写 SVG 图表，`__ModuleLoader__` bundle） |
 | `cordis.patch.yml` | bundle 层挂载行 |
+| `scripts/render-preview.mjs` | 开发工具：生成统计页仪表盘预览 HTML |
 | `tests/` | 验证脚本 + 官方页 fixture |
 
 ---
