@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-8A2BE2.svg)](https://github.com/topics/dsh-plugin)
-[![Version](https://img.shields.io/badge/version-0.7.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.7.1-green.svg)](package.json)
 
 </div>
 
@@ -38,6 +38,31 @@
 图中可见：KPI 概览卡（今日 / 昨日环比 / 本月·预算环 / 累计 / 调用次数）· 费用趋势折线图 · 按模型费用占比环形图 · Token 用量趋势折线图 · 按 Provider 实际花费占比环形图 · 月度预算进度条 · 账户余额 · 按模型 / 按天明细。
 
 > 截图由 `scripts/render-preview.mjs` 用模拟账本数据生成；真实界面随实际账本数据展示。
+
+---
+
+## 🛠 更新日志
+
+### v0.7.1（2026-08-24）
+
+**修复：DSH 桌面端 2.0.2（核心 0.1.1-rc.1+）下费用行不显示、账本冻结。**
+
+核心 0.1.1-rc.1 起，`sessionProjections.register()` 改为只读 `wire: { viewSchema, view }` 块，
+旧顶层 `schema` / `view` 字段被忽略，投影被当成「仅宿主内部」：宿主照常计费，但浏览器端
+永远收不到数据（费用行隐藏、账本自升级起不再写入）。本版按官方 dsh-context 插件的兼容写法
+同时提供新旧两套注册字段，**rc.8 与 rc.1+ 双核心通用，无需改动安装方式**——升级桌面端后
+请更新本插件到此版本并重启 DSH。
+
+另含：`blocks` 初始化从数组改为对象（修复宿主 plain-JSON 序列化契约告警）、
+`usage` 字段缺失回退 0、费用行投影缺失时静默隐藏。
+
+### v0.7.0
+
+统计页升级为仪表盘（KPI 概览 + 趋势折线图 + 占比环形图 + 月度预算预警）。
+
+### v0.6.0
+
+Provider 收费形式（订阅 / 免费 / 本地）+ Token 缓存命中统计。
 
 ---
 
