@@ -6,29 +6,21 @@ if (!token) {
   process.exit(1)
 }
 
-const body = `## 🛠 v0.7.1 — 修复 DSH 桌面端 2.0.2（核心 0.1.1-rc.1+）费用行不显示
+const body = `## 🛠 v0.7.2 — 高峰窗口支持星期几维度：2026-08-23 起官方高峰仅限周一至周五，周末全天空闲价
 
-**这是桌面端 2.0.2 用户的必更版本。** 升级桌面端后如果输入框下方的实时费用行消失、
-统计账本停止累积，就是本修复针对的问题。
-
-### 根因
-核心 0.1.1-rc.1 起，\`sessionProjections.register()\` 改为只读 \`wire: { viewSchema, view }\` 块，
-旧顶层 \`schema\` / \`view\` 字段被忽略，投影被当成「仅宿主内部」：宿主照常计费，但浏览器端
-永远收不到数据——费用行隐藏，账本（靠变更通知记账）自升级起静默冻结，且无任何日志报错。
+官方于 2026-08-23（北京时间）起调整峰谷规则：高峰时段只落在**周一至周五**，周六周日全天按空闲价（半价）。
+旧版窗口数据结构只有 \`[起分, 止分]\`（一天里的分钟），抓下来的「周一至周五」没处放，周末请求仍按高峰价计费（每周约 14 小时多计一倍）。本版为窗口增加星期几维度：
 
 ### 修复
-- 按官方 dsh-context 插件的兼容写法，注册时同时提供新旧两套字段
-  （\`wire\` 块 + \`stateSchema: zod.json()\` + 保留顶层 \`schema\`/\`view\`），**rc.8 与 rc.1+ 双核心通用**，
-  安装方式不变，更新插件后重启 DSH 即可
-- \`blocks\` 初始化从数组改为对象，修复宿主 plain-JSON 序列化契约告警
-- \`usage.inputTokens/outputTokens\` 缺失时回退 0
-- 费用行在投影缺失/hook 异常时静默隐藏（不再显示诊断文本）
+- **窗口支持第三维 days**：\`[起分, 止分, [1,2,3,4,5]]\`（0=周日…6=周六，缺省 = 每天）；新增 \`weekdayInTz(atMs, tz)\` 按同一 tz 读星期几（不退回 \`getUTCDay()\`，规避 UTC/北京两本日历在周五/周日 16:00-24:00 UTC 的分歧）
+- **官网解析**：中文页识别「周一至周五 / 工作日」，英文页识别 "Monday through Friday" / "weekdays"，自动写入 days；英文页窗口 +8h 折算为北京时间，与中文页同一日历
+- **历史回看不减半**：周末空闲规则加 effectiveAt 门控（生效时刻 \`2026-08-22T16:00:00Z\`），生效前的周末仍按高峰价计费——回看旧账不会少算一半
+- **默认窗口/时区**改为北京时间（Asia/Shanghai）+ 工作日限定
 
-### 其他
-- 新增诊断工具：\`tests/debug-*.mjs\`（投影序列化检查 / 缓存状态体检 / 真实会话分帧解压全量重放）
-- 新增 \`scripts/fix-deps.ps1\`：pnpm install 清空 link 包依赖后一键重建 Junction 链接
+### 验证
+用 [deepseek-peak-hours](https://github.com/xyzs996/deepseek-peak-hours) 的 15 条边界向量验证：**15/15 通过**（修复前 10/15）；本地测试套件 123 通过 / 0 失败。
 
-**Full Changelog**: https://github.com/2006spy/dsh-token-billing/compare/v0.7.0...v0.7.1`
+**Full Changelog**: https://github.com/2006spy/dsh-token-billing/compare/v0.7.1...v0.7.2`
 
 const res = await fetch('https://api.github.com/repos/2006spy/dsh-token-billing/releases', {
   method: 'POST',
@@ -40,8 +32,8 @@ const res = await fetch('https://api.github.com/repos/2006spy/dsh-token-billing/
     'x-github-api-version': '2022-11-28',
   },
   body: JSON.stringify({
-    tag_name: 'v0.7.1',
-    name: 'v0.7.1',
+    tag_name: 'v0.7.2',
+    name: 'v0.7.2',
     body,
     draft: false,
     prerelease: false,
