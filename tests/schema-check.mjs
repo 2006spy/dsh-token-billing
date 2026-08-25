@@ -24,7 +24,7 @@ const viewSchema = z.object({
     source: z.string(),
     peakBilling: z.boolean(),
     peakActive: z.boolean(),
-    windows: z.array(z.tuple([z.number(), z.number()])),
+    windows: z.array(z.tuple([z.number(), z.number()]).rest(z.any())),
   }).strict(),
   prices: z.array(z.object({
     model: z.string(),

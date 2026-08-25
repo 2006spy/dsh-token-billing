@@ -10,6 +10,7 @@ import {
   costOf,
   priceAt,
   inWindow,
+  parsePeakWindows,
   providerModeOf,
   BUILTIN_PRICES,
 } from '../lib/projection.js'
@@ -43,7 +44,9 @@ console.log('== 1. 配置解析 ==')
   check('overrides 生效', spec.overrides['deepseek-chat'].output === 4)
   check('内置表可查', BUILTIN_PRICES['glm-4v-flash'].input === 0)
   check('未知模型回退 fallback', spec.fallback.input === 2)
-  check('高峰窗口默认解析', spec.peak.windows.length === 2 && spec.peak.windows[0][0] === toMinutes('01:00'))
+  check('高峰窗口默认解析', spec.peak.windows.length === 2 && spec.peak.windows[0][0] === toMinutes('09:00')
+    && JSON.stringify(spec.peak.windows[0][2]) === '[1,2,3,4,5]')
+  check('默认窗口时区 Asia/Shanghai', spec.peak.tz === 'Asia/Shanghai')
   check('默认适用 deepseek-*', spec.peak.models[0] === 'deepseek-*')
   check('非法 JSON 抛错', (() => { try { resolveBillingSpec({ prices: '{bad' }); return false } catch { return true } })())
   check('折扣率越界抛错', (() => { try { resolveBillingSpec({ offPeakRate: 2 }); return false } catch { return true } })())
@@ -60,7 +63,8 @@ console.log('== 2. DeepSeek 官方页解析（真实 fixture） ==')
   check('高峰 flash 输出 $1.32', parsed.peak !== null && Math.abs(parsed.peak.models['deepseek-v4-flash'].output - 1.32) < 1e-9)
   check('错峰 flash 输出 $0.66', parsed.peak !== null && Math.abs(parsed.peak.offPeak['deepseek-v4-flash'].output - 0.66) < 1e-9)
   check('高峰窗口 2 个', parsed.peak !== null && parsed.peak.windows.length === 2, parsed.peak?.windows)
-  check('窗口值 01:00/04:00', parsed.peak !== null && parsed.peak.windows[0][0] === '01:00' && parsed.peak.windows[0][1] === '04:00')
+  check('窗口值 09:00/12:00（UTC 折算北京）', parsed.peak !== null && parsed.peak.windows[0][0] === '9:00' && parsed.peak.windows[0][1] === '12:00')
+  check('英文页窗口时区折算为 Asia/Shanghai', parsed.peak !== null && parsed.peak.tz === 'Asia/Shanghai')
   check('生效日期 2026-08-16 16:00 UTC', parsed.peak !== null && parsed.peak.effectiveAt === Date.UTC(2026, 7, 16, 16), parsed.peak?.effectiveAt)
 }
 
@@ -206,9 +210,9 @@ console.log('== 8. 高峰/错峰时段计价（USD 原价路径，关折算） =
   // 错峰时段（11:00 UTC）→ 错峰价
   const off = priceAt('deepseek-v4-flash', spec, OFFPEAK_MS)
   check('错峰时段用错峰价', Math.abs(off.output - 0.66) < 1e-9, off)
-  // 窗口边界函数
-  check('inWindow 01:30 高峰', inWindow(PEAK_MS, spec.peak.windows, 'UTC') === true)
-  check('inWindow 11:00 错峰', inWindow(OFFPEAK_MS, spec.peak.windows, 'UTC') === false)
+  // 窗口边界函数（窗口/时区随抓取合并，均为北京时间）
+  check('inWindow 01:30 高峰', inWindow(PEAK_MS, spec.peak.windows, spec.peak.tz) === true)
+  check('inWindow 11:00 错峰', inWindow(OFFPEAK_MS, spec.peak.windows, spec.peak.tz) === false)
   // 非 deepseek 模型不受影响
   const glm = priceAt('glm-4v-flash', spec, PEAK_MS)
   check('glm 不参与高峰/错峰', Math.abs(glm.output) < 1e-12 && glm.currency === '¥')
@@ -409,6 +413,70 @@ console.log('== 17. provider 收费形式（metering：订阅/免费/本地） =
   const view = parts.view(state)
   check('结算 step 带 mode=subscription', view.steps.length === 1 && view.steps[0].mode === 'subscription', view.steps[0])
   check('结算 step 仍计 cost（名义）', view.steps[0].cost > 0)
+}
+
+console.log('== 18. 新版官网（2026-08-23 起：高峰仅周一至周五、周末全天空闲） ==')
+{
+  // —— 中文版：句子带「周一至周五」，价格表结构与旧 fixture 一致 ——
+  const zhHtml = `<html><body>
+<p>(1) 我们将对 DeepSeek API 价格进行更新调整，采用峰谷定价，空闲时段价格为高峰时段价格的一半。高峰时段为北京时间周一至周五 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。新价格将于北京时间 2026 年 8 月 23 日 00:00 开始生效，具体如下：</p>
+<div style="font-size:14px"><b><table style="text-align:center"><tr><td colspan="2" style="text-align:center">模型</td><td>deepseek-v4-flash</td><td>deepseek-v4-pro</td></tr><tr><td colspan="2">BASE URL (OpenAI 格式)</td><td colspan="2">https://api.deepseek.com</td></tr><tr><td colspan="2">BASE URL (Anthropic 格式)</td><td colspan="2">https://api.deepseek.com/anthropic</td></tr><tr><td colspan="2" style="text-align:center">模型版本</td><td>DeepSeek-V4-Flash-0731</td><td>DeepSeek-V4-Pro-0813</td></tr><tr><td colspan="2">上下文长度</td><td colspan="2">1M</td></tr><tr><td colspan="2">输出长度</td><td colspan="2">最大 384K</td></tr><tr><td rowspan="3">价格<sup>(1)</sup></td><td>百万tokens输入（缓存命中）</td><td>0.02元</td><td>0.025元</td></tr><tr><td>百万tokens输入（缓存未命中）</td><td>1元</td><td>3元</td></tr><tr><td>百万tokens输出</td><td>2元</td><td>6元</td></tr></table></b></div>
+<div style="font-size:14px"><table style="text-align:center"><tr><td colspan="2">模型</td><td>百万tokens输入（缓存命中）</td><td>百万tokens输入（缓存未命中）</td><td>百万tokens输出</td></tr><tr><td rowspan="2">deepseek-v4-flash</td><td>空闲时段</td><td>0.05元</td><td>1.5元</td><td>4.5元</td></tr><tr><td>高峰时段</td><td>0.10元</td><td>3.0元</td><td>9.0元</td></tr><tr><td rowspan="2">deepseek-v4-pro</td><td>空闲时段</td><td>0.15元</td><td>4.5元</td><td>13.5元</td></tr><tr><td>高峰时段</td><td>0.30元</td><td>9.0元</td><td>27.0元</td></tr></table></div>
+</body></html>`
+  const zhParsed = parseDeepSeekPricingHtml(zhHtml)
+  check('中文新版解析出 2 个窗口', zhParsed.peak !== null && zhParsed.peak.windows.length === 2, zhParsed.peak?.windows)
+  check('中文新版窗口带工作日 days', zhParsed.peak !== null
+    && JSON.stringify(zhParsed.peak.windows[0][2]) === '[1,2,3,4,5]'
+    && JSON.stringify(zhParsed.peak.windows[1][2]) === '[1,2,3,4,5]', zhParsed.peak?.windows)
+  check('中文新版时区 Asia/Shanghai', zhParsed.peak !== null && zhParsed.peak.tz === 'Asia/Shanghai')
+  check('中文新版生效 = UTC 2026-08-22 16:00', zhParsed.peak !== null && zhParsed.peak.effectiveAt === Date.UTC(2026, 7, 22, 16), zhParsed.peak?.effectiveAt)
+  check('价格解析不受影响（高峰 ¥9）', zhParsed.peak !== null && Math.abs(zhParsed.peak.models['deepseek-v4-flash'].output - 9) < 1e-9)
+
+  // —— 英文版：Monday through Friday ——
+  const enHtml = `<html><body><p>DeepSeek API pricing will be updated to peak / off-peak billing. Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday. The new prices take effect at 16:00 UTC on August 22, 2026.</p>
+<div style="font-size:14px"><table style="text-align:center"><tr><td colspan="2">MODEL</td><td>1M INPUT TOKENS (CACHE HIT)</td><td>1M INPUT TOKENS (CACHE MISS)</td><td>1M OUTPUT TOKENS</td></tr><tr><td rowspan="2">deepseek-v4-flash</td><td>OFF-PEAK</td><td>$0.007</td><td>$0.22</td><td>$0.66</td></tr><tr><td>PEAK</td><td>$0.014</td><td>$0.44</td><td>$1.32</td></tr></table></div>
+</body></html>`
+  const enParsed = parseDeepSeekPricingHtml(enHtml)
+  check('英文新版窗口带工作日 days', enParsed.peak !== null && enParsed.peak.windows.length === 2
+    && JSON.stringify(enParsed.peak.windows[0][2]) === '[1,2,3,4,5]', enParsed.peak?.windows)
+  check('英文新版窗口折算为北京时间', enParsed.peak !== null && enParsed.peak.tz === 'Asia/Shanghai'
+    && enParsed.peak.windows[0][0] === '9:00' && enParsed.peak.windows[0][1] === '12:00')
+  check('英文新版生效 = UTC 2026-08-22 16:00', enParsed.peak !== null && enParsed.peak.effectiveAt === Date.UTC(2026, 7, 22, 16), enParsed.peak?.effectiveAt)
+
+  // —— inWindow 直接验证星期几维度（北京时间窗口）——
+  const wBeijingDays = [[540, 720, [1, 2, 3, 4, 5]], [840, 1080, [1, 2, 3, 4, 5]]]
+  check('inWindow 周五 15:00 北京 = 高峰', inWindow(Date.UTC(2026, 7, 28, 7, 0), wBeijingDays, 'Asia/Shanghai') === true)
+  check('inWindow 周六 15:00 北京 = 空闲', inWindow(Date.UTC(2026, 7, 29, 7, 0), wBeijingDays, 'Asia/Shanghai') === false)
+  check('inWindow 周日 15:00 北京 = 空闲', inWindow(Date.UTC(2026, 7, 23, 7, 0), wBeijingDays, 'Asia/Shanghai') === false)
+
+  // —— 端到端：合并官网价后按星期几判峰 ——
+  const spec = resolveBillingSpec({})
+  applyFetchedPrices(spec, zhParsed, Date.UTC(2026, 7, 23, 0))
+  check('合并后窗口带 days', spec.peak.windows.length === 2 && JSON.stringify(spec.peak.windows[0][2]) === '[1,2,3,4,5]', spec.peak.windows)
+  const fri = priceAt('deepseek-v4-flash', spec, Date.UTC(2026, 7, 28, 7, 0))
+  const sat = priceAt('deepseek-v4-flash', spec, Date.UTC(2026, 7, 29, 7, 0))
+  const sun = priceAt('deepseek-v4-flash', spec, Date.UTC(2026, 7, 23, 7, 0))
+  check('周五 15:00 北京按高峰 ¥9', Math.abs(fri.output - 9) < 1e-9, fri)
+  check('周六 15:00 北京按空闲 ¥4.5', Math.abs(sat.output - 4.5) < 1e-9, sat)
+  check('周日 15:00 北京按空闲 ¥4.5', Math.abs(sun.output - 4.5) < 1e-9, sun)
+
+  // —— 历史回看：生效前周末仍按高峰价（勿整体减半）——
+  const specEarly = resolveBillingSpec({})
+  applyFetchedPrices(specEarly, zhParsed, Date.UTC(2026, 7, 22, 15))
+  check('生效前无高峰表（平峰价 ¥2，历史账不受影响）', Math.abs(specEarly.prices['deepseek-v4-flash'].output - 2) < 1e-9, specEarly.prices['deepseek-v4-flash'])
+
+  // —— 历史回看：生效后合并的 spec，回看生效前（8/22）周末时刻仍按高峰价 ——
+  const specLate = resolveBillingSpec({})
+  applyFetchedPrices(specLate, zhParsed, Date.UTC(2026, 7, 23, 0))
+  const satMorn = priceAt('deepseek-v4-flash', specLate, Date.UTC(2026, 7, 22, 1, 30)) // 8/22 周六 09:30 北京
+  const satEve = priceAt('deepseek-v4-flash', specLate, Date.UTC(2026, 7, 22, 9, 59, 59)) // 8/22 周六 17:59:59 北京
+  check('历史回看：生效前周六上午仍按高峰 ¥9', Math.abs(satMorn.output - 9) < 1e-9, satMorn)
+  check('历史回看：生效前周六傍晚仍按高峰 ¥9', Math.abs(satEve.output - 9) < 1e-9, satEve)
+
+  // —— 用户自定义 3 元组窗口 ——
+  const custom = parsePeakWindows([['22:00', '02:00', [5]]])
+  check('用户自定义 3 元组窗口解析', custom.length === 1 && custom[0][0] === 1320 && custom[0][1] === 120 && JSON.stringify(custom[0][2]) === '[5]', custom)
+  check('旧版 2 元组窗口兼容（days 缺省）', parsePeakWindows([['09:00', '12:00']])[0][2] === undefined)
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`)
