@@ -39,7 +39,10 @@ assert(close(mimo.input, 0.14) && close(mimo.output, 0.28) && close(mimo.cacheRe
   `pi-ai 兜底 mimo-v2.5 = ${mimo.input}/${mimo.output}/${mimo.cacheRead}/${mimo.cacheWrite}（应为 0.14/0.28/0.0028/0，currency=${mimo.currency}）`)
 
 // 2) 无 provider → 回落 fallback，而不是 provider 价
-const noProv = priceAt('', 'mimo-v2.5', spec, NOW)
+//    显式传入 fallback 四项：断言与全局 DEFAULT_FALLBACK 解耦，默认值将来改动不再误伤本用例。
+const specFallback = plainSpec({ fallbackInput: 2, fallbackOutput: 8, fallbackCacheRead: 0.5, fallbackCacheWrite: 2 })
+applyProviderPrices(specFallback, 'opencode-go', loadPiAiProvider('opencode-go', piAiDataDir()))
+const noProv = priceAt('', 'mimo-v2.5', specFallback, NOW)
 assert(close(noProv.input, 2) && close(noProv.output, 8), `无 provider 回落 fallback（${noProv.input}/${noProv.output}）`)
 
 // 3) provider 优先级：qwen3.7-max @opencode-go = 2.5/7.5/0.5/3.125
@@ -48,11 +51,17 @@ assert(close(qwen.input, 2.5) && close(qwen.output, 7.5) && close(qwen.cacheWrit
   `qwen3.7-max @opencode-go = ${qwen.input}/${qwen.output}/${qwen.cacheWrite}（应为 2.5/7.5/3.125）`)
 
 // 4) 不同 provider 同名模型各按各的价格表，互不影响
+//    本机 catalog（pi-ai v0.85.1）实测：deepseek 的 deepseek-v4-flash = 0.14，
+//    opencode-go 的同名模型 = 0.22。因此这条断言**同时**是两件事的正向证据：
+//      (a) (provider, model) 双命中时各按各的价；
+//      (b) **不跨 provider 串价** —— 若实现串价，两者会被算成同一个价，这条立刻失败。
+//    （原断言要求两者相等，其数值来自上游 v0.82.1 的旧表；v0.85.1 里 opencode-go 已调为 0.22，
+//      故按「互不影响」的本意改为断言各自取值且不相等。）
 applyProviderPrices(spec, 'deepseek', loadPiAiProvider('deepseek', piAiDataDir()))
 const dsFlash = priceAt('deepseek', 'deepseek-v4-flash', spec, NOW)
 const ogFlash = priceAt('opencode-go', 'deepseek-v4-flash', spec, NOW)
-assert(close(dsFlash.input, 0.14) && close(dsFlash.input, ogFlash.input),
-  `deepseek-v4-flash 双 provider 各自计价（deepseek=${dsFlash.input}，opencode-go=${ogFlash.input}）`)
+assert(close(dsFlash.input, 0.14) && close(ogFlash.input, 0.22) && !close(dsFlash.input, ogFlash.input),
+  `deepseek-v4-flash 双 provider 各自计价、互不影响（deepseek=${dsFlash.input}，opencode-go=${ogFlash.input}；应 0.14 / 0.22 且不相等）`)
 
 // 5) 用户全局覆盖最高（钉死，不随 provider 变）
 const specOv = resolveBillingSpec({ fxEnabled: false, prices: JSON.stringify({ 'mimo-v2.5': { input: 99, output: 99, cacheRead: 9, cacheWrite: 9 } }) })

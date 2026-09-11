@@ -7,14 +7,30 @@ import {
   createTokenBillingProjectionParts,
   resolveBillingSpec,
   applyFetchedPrices,
+  applyProviderPrices,
   costOf,
   priceAt,
+  priceEntry,
+  lookupByModel,
   inWindow,
   parsePeakWindows,
   providerModeOf,
+  policySegmentIndex,
+  PRICE_POLICY_TIMELINE,
   BUILTIN_PRICES,
+  BUILTIN_PEAK_PRICES,
+  DEFAULT_FALLBACK,
 } from '../lib/projection.js'
-import { parseDeepSeekPricingHtml, fetchJsonPrices, parsePriceNumber, toMinutes, currencySymbol } from '../lib/prices.js'
+import {
+  parseDeepSeekPricingHtml,
+  fetchJsonPrices,
+  parsePriceNumber,
+  toMinutes,
+  currencySymbol,
+  canonicalModelId,
+  modelTier,
+  stripFootnoteMarks,
+} from '../lib/prices.js'
 
 let passed = 0
 let failed = 0
@@ -43,7 +59,7 @@ console.log('== 1. 配置解析 ==')
   const spec = resolveBillingSpec({ currency: '¥', prices: '{"deepseek-chat":{"input":1,"output":4}}' })
   check('overrides 生效', spec.overrides['deepseek-chat'].output === 4)
   check('内置表可查', BUILTIN_PRICES['glm-4v-flash'].input === 0)
-  check('未知模型回退 fallback', spec.fallback.input === 2)
+  check('未知模型回退 fallback 为官方 Flash 空闲价 ¥1', spec.fallback.input === 1)
   check('高峰窗口默认解析', spec.peak.windows.length === 2 && spec.peak.windows[0][0] === toMinutes('09:00')
     && JSON.stringify(spec.peak.windows[0][2]) === '[1,2,3,4,5]')
   check('默认窗口时区 Asia/Shanghai', spec.peak.tz === 'Asia/Shanghai')
@@ -56,12 +72,13 @@ console.log('== 2. DeepSeek 官方页解析（真实 fixture） ==')
 {
   const html = readFileSync(new URL('./fixtures/deepseek-pricing.html', import.meta.url), 'utf8')
   const parsed = parseDeepSeekPricingHtml(html)
+  // 该 fixture 是 2026-08-17 版官方页（模型名 deepseek-v4-flash）；归一化后统一为官方现名 deepseek-flash
   check('货币 USD', parsed.currency === 'USD')
-  check('平峰表含 deepseek-v4-flash', parsed.flat['deepseek-v4-flash'] !== undefined)
-  check('平峰 flash 输出 $0.28', Math.abs(parsed.flat['deepseek-v4-flash'].output - 0.28) < 1e-9, parsed.flat['deepseek-v4-flash'])
+  check('平峰表含 deepseek-flash（旧名归一化）', parsed.flat['deepseek-flash'] !== undefined, Object.keys(parsed.flat))
+  check('平峰 flash 输出 $0.28', Math.abs(parsed.flat['deepseek-flash'].output - 0.28) < 1e-9, parsed.flat['deepseek-flash'])
   check('高峰表含 deepseek-v4-pro', parsed.peak !== null && parsed.peak.models['deepseek-v4-pro'] !== undefined)
-  check('高峰 flash 输出 $1.32', parsed.peak !== null && Math.abs(parsed.peak.models['deepseek-v4-flash'].output - 1.32) < 1e-9)
-  check('错峰 flash 输出 $0.66', parsed.peak !== null && Math.abs(parsed.peak.offPeak['deepseek-v4-flash'].output - 0.66) < 1e-9)
+  check('高峰 flash 输出 $1.32', parsed.peak !== null && Math.abs(parsed.peak.models['deepseek-flash'].output - 1.32) < 1e-9)
+  check('错峰 flash 输出 $0.66', parsed.peak !== null && Math.abs(parsed.peak.offPeak['deepseek-flash'].output - 0.66) < 1e-9)
   check('高峰窗口 2 个', parsed.peak !== null && parsed.peak.windows.length === 2, parsed.peak?.windows)
   check('窗口值 09:00/12:00（UTC 折算北京）', parsed.peak !== null && parsed.peak.windows[0][0] === '9:00' && parsed.peak.windows[0][1] === '12:00')
   check('英文页窗口时区折算为 Asia/Shanghai', parsed.peak !== null && parsed.peak.tz === 'Asia/Shanghai')
@@ -178,22 +195,22 @@ console.log('== 7. 官网抓取合并（优先级：覆盖 > 抓取 > 内置） 
   // 生效日期未到 → 用平峰价；offPeakForce 后 → 用高峰价
   const specBefore = resolveBillingSpec({ fxEnabled: false, prices: '{"deepseek-v4-flash":{"input":9,"output":9}}' })
   applyFetchedPrices(specBefore, fetched, Date.UTC(2026, 7, 15, 0)) // 生效前
-  const eFlash = specBefore.prices['deepseek-v4-flash']
-  check('生效前：用户覆盖优先', eFlash.input === 9 && eFlash.output === 9, eFlash)
+  const eFlash = specBefore.prices['deepseek-flash']
+  check('生效前：用户覆盖优先（旧名 deepseek-v4-flash 归一化后仍命中）', eFlash.input === 9 && eFlash.output === 9, eFlash)
   check('生效前：无高峰表', Object.keys(specBefore.peak.prices).length === 0)
   check('生效前：其他模型用平峰价', Math.abs(specBefore.prices['deepseek-v4-pro'].output - 0.87) < 1e-9, specBefore.prices['deepseek-v4-pro'])
 
   const specAfter = resolveBillingSpec({ fxEnabled: false })
   applyFetchedPrices(specAfter, fetched, Date.UTC(2026, 7, 17, 0)) // 生效后
-  check('生效后：flash 基准价为高峰价', Math.abs(specAfter.prices['deepseek-v4-flash'].output - 1.32) < 1e-9, specAfter.prices['deepseek-v4-flash'])
-  check('生效后：高峰表就位', Math.abs(specAfter.peak.prices['deepseek-v4-flash'].output - 1.32) < 1e-9)
-  check('生效后：错峰表就位', Math.abs(specAfter.peak.offPeakPrices['deepseek-v4-flash'].output - 0.66) < 1e-9)
-  check('生效后：货币符号 $', specAfter.peak.prices['deepseek-v4-flash'].currency === '$')
+  check('生效后：flash 基准价为高峰价', Math.abs(specAfter.prices['deepseek-flash'].output - 1.32) < 1e-9, specAfter.prices['deepseek-flash'])
+  check('生效后：高峰表就位', Math.abs(specAfter.peak.prices['deepseek-flash'].output - 1.32) < 1e-9)
+  check('生效后：错峰表就位', Math.abs(specAfter.peak.offPeakPrices['deepseek-flash'].output - 0.66) < 1e-9)
+  check('生效后：货币符号 $', specAfter.peak.prices['deepseek-flash'].currency === '$')
 
   // 强制启用
   const specForce = resolveBillingSpec({ fxEnabled: false, offPeakForce: true })
   applyFetchedPrices(specForce, fetched, Date.UTC(2026, 7, 15, 0))
-  check('强制：生效前也启用高峰价', Math.abs(specForce.prices['deepseek-v4-flash'].output - 1.32) < 1e-9)
+  check('强制：生效前也启用高峰价', Math.abs(specForce.prices['deepseek-flash'].output - 1.32) < 1e-9)
 }
 
 console.log('== 8. 高峰/错峰时段计价（USD 原价路径，关折算） ==')
@@ -327,13 +344,13 @@ console.log('== 14. 中文官方页（人民币直计） ==')
   const html = readFileSync(new URL('./fixtures/deepseek-pricing-zh.html', import.meta.url), 'utf8')
   const parsed = parseDeepSeekPricingHtml(html)
   check('中文页币种 CNY', parsed.currency === 'CNY')
-  check('平峰 flash ¥0.02/1/2', Math.abs(parsed.flat['deepseek-v4-flash'].cacheRead - 0.02) < 1e-9
-    && Math.abs(parsed.flat['deepseek-v4-flash'].input - 1) < 1e-9
-    && Math.abs(parsed.flat['deepseek-v4-flash'].output - 2) < 1e-9, parsed.flat['deepseek-v4-flash'])
-  check('高峰 flash ¥0.10/3.0/9.0', parsed.peak !== null && Math.abs(parsed.peak.models['deepseek-v4-flash'].cacheRead - 0.10) < 1e-9
-    && Math.abs(parsed.peak.models['deepseek-v4-flash'].output - 9) < 1e-9, parsed.peak?.models['deepseek-v4-flash'])
-  check('空闲 flash ¥0.05/1.5/4.5', parsed.peak !== null && Math.abs(parsed.peak.offPeak['deepseek-v4-flash'].cacheRead - 0.05) < 1e-9
-    && Math.abs(parsed.peak.offPeak['deepseek-v4-flash'].output - 4.5) < 1e-9, parsed.peak?.offPeak['deepseek-v4-flash'])
+  check('平峰 flash ¥0.02/1/2', Math.abs(parsed.flat['deepseek-flash'].cacheRead - 0.02) < 1e-9
+    && Math.abs(parsed.flat['deepseek-flash'].input - 1) < 1e-9
+    && Math.abs(parsed.flat['deepseek-flash'].output - 2) < 1e-9, parsed.flat['deepseek-flash'])
+  check('高峰 flash ¥0.10/3.0/9.0', parsed.peak !== null && Math.abs(parsed.peak.models['deepseek-flash'].cacheRead - 0.10) < 1e-9
+    && Math.abs(parsed.peak.models['deepseek-flash'].output - 9) < 1e-9, parsed.peak?.models['deepseek-flash'])
+  check('空闲 flash ¥0.05/1.5/4.5', parsed.peak !== null && Math.abs(parsed.peak.offPeak['deepseek-flash'].cacheRead - 0.05) < 1e-9
+    && Math.abs(parsed.peak.offPeak['deepseek-flash'].output - 4.5) < 1e-9, parsed.peak?.offPeak['deepseek-flash'])
   check('中文页窗口（北京时间）', parsed.peak !== null && parsed.peak.windows.length === 2
     && parsed.peak.windows[0][0] === '9:00' && parsed.peak.windows[1][1] === '18:00', parsed.peak?.windows)
   check('中文页时区 Asia/Shanghai', parsed.peak !== null && parsed.peak.tz === 'Asia/Shanghai')
@@ -343,8 +360,8 @@ console.log('== 14. 中文官方页（人民币直计） ==')
   // 端到端：抓取价合并后直接以 ¥ 计费（无需折算）
   const spec = resolveBillingSpec({})
   applyFetchedPrices(spec, parsed, Date.UTC(2026, 7, 17, 0))
-  check('合并后 flash 基准为高峰价 ¥9', Math.abs(spec.prices['deepseek-v4-flash'].output - 9) < 1e-9, spec.prices['deepseek-v4-flash'])
-  check('合并后货币 ¥（无折算）', spec.prices['deepseek-v4-flash'].currency === '¥')
+  check('合并后 flash 基准为高峰价 ¥9', Math.abs(spec.prices['deepseek-flash'].output - 9) < 1e-9, spec.prices['deepseek-flash'])
+  check('合并后货币 ¥（无折算）', spec.prices['deepseek-flash'].currency === '¥')
   check('窗口自动采用北京时间', spec.peak.windows[0][0] === 9 * 60 && spec.peak.tz === 'Asia/Shanghai', spec.peak)
   // 北京 10:00 高峰 → ¥9 输出；北京 20:00 空闲 → ¥4.5
   const bjPeak = priceAt('deepseek-v4-flash', spec, Date.UTC(2026, 7, 17, 2, 0))
@@ -361,9 +378,9 @@ console.log('== 15. 外币→人民币折算（fx，兜底场景） ==')
   const spec = resolveBillingSpec({ fxEnabled: true, fxRate: 7.2 })
   applyFetchedPrices(spec, enFetched, Date.UTC(2026, 7, 17, 0))
   // $1.32 × 7.2 = ¥9.504
-  check('美元价折算为人民币', Math.abs(spec.prices['deepseek-v4-flash'].output - 1.32 * 7.2) < 1e-9, spec.prices['deepseek-v4-flash'])
-  check('折算后货币 ¥', spec.prices['deepseek-v4-flash'].currency === '¥')
-  check('高峰价同样折算', Math.abs(spec.peak.prices['deepseek-v4-flash'].output - 1.32 * 7.2) < 1e-9)
+  check('美元价折算为人民币', Math.abs(spec.prices['deepseek-flash'].output - 1.32 * 7.2) < 1e-9, spec.prices['deepseek-flash'])
+  check('折算后货币 ¥', spec.prices['deepseek-flash'].currency === '¥')
+  check('高峰价同样折算', Math.abs(spec.peak.prices['deepseek-flash'].output - 1.32 * 7.2) < 1e-9)
   check('内置表不受影响', spec.prices['glm-4v-flash'].currency === '¥' && Math.abs(spec.prices['glm-4v-flash'].output) < 1e-9)
 }
 
@@ -376,15 +393,15 @@ console.log('== 16. 高峰/错峰生效时刻自动切换（无需重抓官网�
   // 生效前：peakActive false → 用平峰价
   const specBefore = resolveBillingSpec({})
   applyFetchedPrices(specBefore, parsed, effectiveAt - 1000)
-  check('生效前用平峰价 ¥2', Math.abs(specBefore.prices['deepseek-v4-flash'].output - 2) < 1e-9, specBefore.prices['deepseek-v4-flash'])
+  check('生效前用平峰价 ¥2', Math.abs(specBefore.prices['deepseek-flash'].output - 2) < 1e-9, specBefore.prices['deepseek-flash'])
   check('生效前无高峰表', Object.keys(specBefore.peak.prices).length === 0)
 
   // 生效后：同一份缓存，merge 时按当前时刻自动切换
   const specAfter = resolveBillingSpec({})
   applyFetchedPrices(specAfter, parsed, effectiveAt + 1000)
-  check('生效后自动切高峰价 ¥9', Math.abs(specAfter.prices['deepseek-v4-flash'].output - 9) < 1e-9, specAfter.prices['deepseek-v4-flash'])
-  check('生效后高峰表就位', Math.abs(specAfter.peak.prices['deepseek-v4-flash'].output - 9) < 1e-9)
-  check('生效后空闲价就位', Math.abs(specAfter.peak.offPeakPrices['deepseek-v4-flash'].output - 4.5) < 1e-9)
+  check('生效后自动切高峰价 ¥9', Math.abs(specAfter.prices['deepseek-flash'].output - 9) < 1e-9, specAfter.prices['deepseek-flash'])
+  check('生效后高峰表就位', Math.abs(specAfter.peak.prices['deepseek-flash'].output - 9) < 1e-9)
+  check('生效后空闲价就位', Math.abs(specAfter.peak.offPeakPrices['deepseek-flash'].output - 4.5) < 1e-9)
 }
 
 console.log('== 17. provider 收费形式（metering：订阅/免费/本地） ==')
@@ -430,7 +447,7 @@ console.log('== 18. 新版官网（2026-08-23 起：高峰仅周一至周五、�
     && JSON.stringify(zhParsed.peak.windows[1][2]) === '[1,2,3,4,5]', zhParsed.peak?.windows)
   check('中文新版时区 Asia/Shanghai', zhParsed.peak !== null && zhParsed.peak.tz === 'Asia/Shanghai')
   check('中文新版生效 = UTC 2026-08-22 16:00', zhParsed.peak !== null && zhParsed.peak.effectiveAt === Date.UTC(2026, 7, 22, 16), zhParsed.peak?.effectiveAt)
-  check('价格解析不受影响（高峰 ¥9）', zhParsed.peak !== null && Math.abs(zhParsed.peak.models['deepseek-v4-flash'].output - 9) < 1e-9)
+  check('价格解析不受影响（高峰 ¥9）', zhParsed.peak !== null && Math.abs(zhParsed.peak.models['deepseek-flash'].output - 9) < 1e-9)
 
   // —— 英文版：Monday through Friday ——
   const enHtml = `<html><body><p>DeepSeek API pricing will be updated to peak / off-peak billing. Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday. The new prices take effect at 16:00 UTC on August 22, 2026.</p>
@@ -463,7 +480,7 @@ console.log('== 18. 新版官网（2026-08-23 起：高峰仅周一至周五、�
   // —— 历史回看：生效前周末仍按高峰价（勿整体减半）——
   const specEarly = resolveBillingSpec({})
   applyFetchedPrices(specEarly, zhParsed, Date.UTC(2026, 7, 22, 15))
-  check('生效前无高峰表（平峰价 ¥2，历史账不受影响）', Math.abs(specEarly.prices['deepseek-v4-flash'].output - 2) < 1e-9, specEarly.prices['deepseek-v4-flash'])
+  check('生效前无高峰表（平峰价 ¥2，历史账不受影响）', Math.abs(specEarly.prices['deepseek-flash'].output - 2) < 1e-9, specEarly.prices['deepseek-flash'])
 
   // —— 历史回看：生效后合并的 spec，回看生效前（8/22）周末时刻仍按高峰价 ——
   const specLate = resolveBillingSpec({})
@@ -477,6 +494,228 @@ console.log('== 18. 新版官网（2026-08-23 起：高峰仅周一至周五、�
   const custom = parsePeakWindows([['22:00', '02:00', [5]]])
   check('用户自定义 3 元组窗口解析', custom.length === 1 && custom[0][0] === 1320 && custom[0][1] === 120 && JSON.stringify(custom[0][2]) === '[5]', custom)
   check('旧版 2 元组窗口兼容（days 缺省）', parsePeakWindows([['09:00', '12:00']])[0][2] === undefined)
+}
+
+/* ------------------------------------------------------------------ */
+/* v0.8.0 计价正确性回归（脚注归一化 / 档位别名 / 现值 / 政策时间线）   */
+/* ------------------------------------------------------------------ */
+
+console.log('== 19. 官方现页（2026-09 版）脚注污染归一化 ==')
+{
+  const zh = parseDeepSeekPricingHtml(readFileSync(new URL('./fixtures/deepseek-pricing-zh-2026-09.html', import.meta.url), 'utf8'))
+  const en = parseDeepSeekPricingHtml(readFileSync(new URL('./fixtures/deepseek-pricing-en-2026-09.html', import.meta.url), 'utf8'))
+  const hasFootnoteKey = (obj) => Object.keys(obj ?? {}).some((k) => /[()（）[\]【】]/.test(k))
+
+  check('中文现页无括号脚注 key', !hasFootnoteKey(zh.flat) && !hasFootnoteKey(zh.peak?.models) && !hasFootnoteKey(zh.peak?.offPeak))
+  check('英文现页无括号脚注 key', !hasFootnoteKey(en.flat) && !hasFootnoteKey(en.peak?.models))
+  check('旧脏 key 不再出现', zh.flat['deepseek-flash(1)'] === undefined && zh.flat['deepseek-v4-pro(2)'] === undefined)
+  check('中文现页 key = 官方现名', zh.flat['deepseek-flash'] !== undefined && zh.flat['deepseek-v4-pro'] !== undefined, Object.keys(zh.flat))
+  check('中文现页币种 CNY', zh.currency === 'CNY')
+  // 官方现值（¥/1M）：flash 空闲 0.02/1/4、高峰 0.04/2/8
+  check('中文现页 flash 空闲 ¥0.02/1/4', Math.abs(zh.flat['deepseek-flash'].cacheRead - 0.02) < 1e-9
+    && Math.abs(zh.flat['deepseek-flash'].input - 1) < 1e-9
+    && Math.abs(zh.flat['deepseek-flash'].output - 4) < 1e-9, zh.flat['deepseek-flash'])
+  check('中文现页 flash 高峰 ¥0.04/2/8', zh.peak !== null && Math.abs(zh.peak.models['deepseek-flash'].cacheRead - 0.04) < 1e-9
+    && Math.abs(zh.peak.models['deepseek-flash'].input - 2) < 1e-9
+    && Math.abs(zh.peak.models['deepseek-flash'].output - 8) < 1e-9, zh.peak?.models['deepseek-flash'])
+  check('中文现页 pro 空闲 ¥0.15/4.5/13.5', Math.abs(zh.flat['deepseek-v4-pro'].cacheRead - 0.15) < 1e-9
+    && Math.abs(zh.flat['deepseek-v4-pro'].input - 4.5) < 1e-9
+    && Math.abs(zh.flat['deepseek-v4-pro'].output - 13.5) < 1e-9)
+  check('中文现页 pro 高峰 ¥0.3/9/27', zh.peak !== null && Math.abs(zh.peak.models['deepseek-v4-pro'].cacheRead - 0.3) < 1e-9
+    && Math.abs(zh.peak.models['deepseek-v4-pro'].input - 9) < 1e-9
+    && Math.abs(zh.peak.models['deepseek-v4-pro'].output - 27) < 1e-9)
+  check('中文现页高峰窗口带工作日 days', zh.peak !== null && JSON.stringify(zh.peak.windows[0][2]) === '[1,2,3,4,5]'
+    && JSON.stringify(zh.peak.windows[1][2]) === '[1,2,3,4,5]', zh.peak?.windows)
+  check('中文现页时区 Asia/Shanghai', zh.peak !== null && zh.peak.tz === 'Asia/Shanghai')
+  // 英文页（USD/1M）：flash 空闲 0.003/0.15/0.6、高峰 0.006/0.3/1.2
+  check('英文现页币种 USD', en.currency === 'USD')
+  check('英文现页 flash 空闲 $0.003/0.15/0.6', Math.abs(en.flat['deepseek-flash'].cacheRead - 0.003) < 1e-9
+    && Math.abs(en.flat['deepseek-flash'].input - 0.15) < 1e-9
+    && Math.abs(en.flat['deepseek-flash'].output - 0.6) < 1e-9)
+  check('英文现页 flash 高峰 $0.006/0.3/1.2', en.peak !== null && Math.abs(en.peak.models['deepseek-flash'].cacheRead - 0.006) < 1e-9
+    && Math.abs(en.peak.models['deepseek-flash'].output - 1.2) < 1e-9)
+  // 端到端：抓中文现页合并后按官方现价计费（北京 20:00 空闲 / 10:00 高峰）
+  const spec = resolveBillingSpec({})
+  applyFetchedPrices(spec, zh, Date.UTC(2026, 8, 11, 13, 52))
+  const nowOff = priceAt('', 'deepseek-flash', spec, Date.UTC(2026, 8, 11, 12, 0))
+  const nowPeak = priceAt('', 'deepseek-flash', spec, Date.UTC(2026, 8, 11, 2, 0))
+  check('现页合并后 09-11 空闲 ¥0.02/1/4', Math.abs(nowOff.cacheRead - 0.02) < 1e-9 && Math.abs(nowOff.output - 4) < 1e-9, nowOff)
+  check('现页合并后 09-11 高峰 ¥0.04/2/8', Math.abs(nowPeak.cacheRead - 0.04) < 1e-9 && Math.abs(nowPeak.output - 8) < 1e-9, nowPeak)
+}
+
+console.log('== 20. 模型档位/别名归一化（解析层与写入层共用） ==')
+{
+  const flashNames = [
+    'deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731',
+    'deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-vision-exp', 'DeepSeek-V4-Flash-0731',
+    'deepseek/deepseek-v4-flash-0731', 'deepseek-flash(1)',
+  ]
+  for (const name of flashNames) {
+    check(`flash 档：${name}`, modelTier(name) === 'flash' && canonicalModelId(name) === 'deepseek-flash',
+      { tier: modelTier(name), id: canonicalModelId(name) })
+  }
+  for (const name of ['deepseek-v4-pro', 'deepseek-v4-pro-0813', 'DeepSeek-V4-Pro-0813', 'deepseek-v4-pro(2)']) {
+    check(`pro 档：${name}`, modelTier(name) === 'pro' && canonicalModelId(name) === 'deepseek-v4-pro',
+      { tier: modelTier(name), id: canonicalModelId(name) })
+  }
+  check('非 DeepSeek 模型键不变', canonicalModelId('mimo-v2.5') === 'mimo-v2.5' && canonicalModelId('deepseek-chat') === 'deepseek-chat')
+  check('档位不误判（proxy 不是 pro）', modelTier('deepseek-v4-proxy') === null)
+  check('脚注剥离函数', stripFootnoteMarks('deepseek-flash(1)') === 'deepseek-flash'
+    && stripFootnoteMarks('deepseek-v4-pro（2）') === 'deepseek-v4-pro'
+    && stripFootnoteMarks('deepseek-flash¹') === 'deepseek-flash')
+  // 账本里的全部真实模型名都能命中档位价（而不是回落 fallback）
+  const spec = resolveBillingSpec({})
+  const at = Date.UTC(2026, 8, 11, 12, 0) // 北京时间 20:00（空闲价）
+  for (const name of [
+    'deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731',
+    'deepseek-v4-flash-ga-260731', 'deepseek-v4-flash-vision-exp', 'DeepSeek-V4-Flash-0731',
+    'deepseek/deepseek-v4-flash-0731',
+  ]) {
+    const p = priceAt('', name, spec, at)
+    check(`flash 档取价：${name}`, Math.abs(p.output - 4) < 1e-9 && Math.abs(p.cacheRead - 0.02) < 1e-9, p)
+  }
+  for (const name of ['deepseek-v4-pro', 'deepseek-v4-pro-0813']) {
+    const p = priceAt('', name, spec, at)
+    check(`pro 档取价：${name}`, Math.abs(p.output - 13.5) < 1e-9 && Math.abs(p.cacheRead - 0.15) < 1e-9, p)
+  }
+}
+
+console.log('== 21. 内置表与 fallback 更新为官方现值 ==')
+{
+  check('BUILTIN flash 空闲 ¥0.02/1/4', BUILTIN_PRICES['deepseek-flash'].cacheRead === 0.02
+    && BUILTIN_PRICES['deepseek-flash'].input === 1 && BUILTIN_PRICES['deepseek-flash'].output === 4, BUILTIN_PRICES['deepseek-flash'])
+  check('BUILTIN pro 空闲 ¥0.15/4.5/13.5', BUILTIN_PRICES['deepseek-v4-pro'].cacheRead === 0.15
+    && BUILTIN_PRICES['deepseek-v4-pro'].input === 4.5 && BUILTIN_PRICES['deepseek-v4-pro'].output === 13.5, BUILTIN_PRICES['deepseek-v4-pro'])
+  check('BUILTIN 高峰 flash ¥0.04/2/8', BUILTIN_PEAK_PRICES['deepseek-flash'].cacheRead === 0.04
+    && BUILTIN_PEAK_PRICES['deepseek-flash'].input === 2 && BUILTIN_PEAK_PRICES['deepseek-flash'].output === 8)
+  check('BUILTIN 高峰 pro ¥0.3/9/27', BUILTIN_PEAK_PRICES['deepseek-v4-pro'].cacheRead === 0.3
+    && BUILTIN_PEAK_PRICES['deepseek-v4-pro'].input === 9 && BUILTIN_PEAK_PRICES['deepseek-v4-pro'].output === 27)
+  check('DEFAULT_FALLBACK = 官方 Flash 空闲价 ¥0.02/1/4', DEFAULT_FALLBACK.input === 1 && DEFAULT_FALLBACK.output === 4
+    && DEFAULT_FALLBACK.cacheRead === 0.02 && DEFAULT_FALLBACK.cacheWrite === 1, DEFAULT_FALLBACK)
+  check('旧内置 flash 价 2/8/0.5/2 已退役', BUILTIN_PRICES['deepseek-v4-flash'] === undefined)
+}
+
+console.log('== 22. 价格政策时间线（按消息时刻取价，历史回看不被追溯改写） ==')
+{
+  // 北京时间 → UTC 绝对时刻（bj(8,17,10) = 2026-08-17 10:00 北京）
+  const bj = (m, d, h, mi = 0) => Date.UTC(2026, m - 1, d, h - 8, mi)
+  const spec = resolveBillingSpec({}) // 仅内置表（无抓取）
+  check('时间线三段（平价 / 08-17 峰谷 / 09-10 Flash 新价）', PRICE_POLICY_TIMELINE.length === 3
+    && PRICE_POLICY_TIMELINE[1].since === Date.UTC(2026, 7, 16, 16)
+    && PRICE_POLICY_TIMELINE[2].since === Date.UTC(2026, 8, 10, 4), PRICE_POLICY_TIMELINE.map((s) => s.label))
+  check('政策段索引随时刻变化', policySegmentIndex(bj(8, 16, 10)) === 0
+    && policySegmentIndex(bj(8, 20, 10)) === 1 && policySegmentIndex(bj(9, 10, 12)) === 2)
+
+  // 08-17 峰谷起点：之前平价（早晚同价），之后峰谷分明
+  const pre = priceAt('', 'deepseek-v4-flash', spec, bj(8, 16, 10))
+  const preEve = priceAt('', 'deepseek-v4-flash', spec, bj(8, 16, 22))
+  check('08-17 前：平价 ¥0.02/1/2（早晚同价）', Math.abs(pre.output - 2) < 1e-9 && Math.abs(preEve.output - 2) < 1e-9, { pre, preEve })
+  const onPeak = priceAt('', 'deepseek-v4-flash', spec, bj(8, 17, 10))
+  const onOff = priceAt('', 'deepseek-v4-flash', spec, bj(8, 17, 20))
+  check('08-17 起：高峰 ¥0.10/3/9', Math.abs(onPeak.cacheRead - 0.1) < 1e-9 && Math.abs(onPeak.output - 9) < 1e-9, onPeak)
+  check('08-17 起：空闲 ¥0.05/1.5/4.5', Math.abs(onOff.cacheRead - 0.05) < 1e-9 && Math.abs(onOff.output - 4.5) < 1e-9, onOff)
+
+  // 08-23 周末空闲：之前周末仍按高峰，之后周末全天空闲
+  const satBefore = priceAt('', 'deepseek-v4-flash', spec, bj(8, 22, 10))
+  const satAfter = priceAt('', 'deepseek-v4-flash', spec, bj(8, 29, 10))
+  const sunAfter = priceAt('', 'deepseek-v4-flash', spec, bj(8, 30, 10))
+  const monAfter = priceAt('', 'deepseek-v4-flash', spec, bj(8, 31, 10))
+  check('08-23 前：周六上午仍按高峰 ¥9', Math.abs(satBefore.output - 9) < 1e-9, satBefore)
+  check('08-23 起：周六全天空闲 ¥4.5', Math.abs(satAfter.output - 4.5) < 1e-9, satAfter)
+  check('08-23 起：周日全天空闲 ¥4.5', Math.abs(sunAfter.output - 4.5) < 1e-9, sunAfter)
+  check('08-23 起：工作日仍按高峰 ¥9', Math.abs(monAfter.output - 9) < 1e-9, monAfter)
+
+  // 09-10 12:00 Flash 调价边界（都在高峰窗口内，隔离时段因素）
+  const beforeChange = priceAt('', 'deepseek-v4-flash', spec, bj(9, 10, 11, 30))
+  const afterChange = priceAt('', 'deepseek-v4-flash', spec, bj(9, 10, 14, 30))
+  check('09-10 12:00 前：高峰仍 ¥9', Math.abs(beforeChange.output - 9) < 1e-9, beforeChange)
+  check('09-10 12:00 后：高峰降为 ¥8', Math.abs(afterChange.output - 8) < 1e-9, afterChange)
+  check('09-10 12:00 后：空闲 ¥0.02/1/4', Math.abs(priceAt('', 'deepseek-v4-flash', spec, bj(9, 11, 20)).output - 4) < 1e-9)
+  check('pro 档 09-10 未调价（高峰 ¥27）', Math.abs(priceAt('', 'deepseek-v4-pro', spec, bj(9, 11, 10)).output - 27) < 1e-9)
+
+  // 历史回看：抓到 09 月现页后，旧消息仍按当时政策计价（不被新规追溯改写）
+  const zh = parseDeepSeekPricingHtml(readFileSync(new URL('./fixtures/deepseek-pricing-zh-2026-09.html', import.meta.url), 'utf8'))
+  const specNow = resolveBillingSpec({})
+  applyFetchedPrices(specNow, zh, Date.UTC(2026, 8, 11, 13, 52))
+  check('抓取现页后：08-20 历史消息仍按旧价 ¥9', Math.abs(priceAt('', 'deepseek-v4-flash', specNow, bj(8, 20, 10)).output - 9) < 1e-9,
+    priceAt('', 'deepseek-v4-flash', specNow, bj(8, 20, 10)))
+  check('抓取现页后：08-16 历史消息仍按平价 ¥2', Math.abs(priceAt('', 'deepseek-v4-flash', specNow, bj(8, 16, 10)).output - 2) < 1e-9)
+  check('抓取现页后：09-11 当前高峰 ¥8（跟随官网）', Math.abs(priceAt('', 'deepseek-v4-flash', specNow, bj(9, 11, 10)).output - 8) < 1e-9)
+  check('抓取现页后：09-11 当前空闲 ¥4（跟随官网）', Math.abs(priceAt('', 'deepseek-v4-flash', specNow, bj(9, 11, 20)).output - 4) < 1e-9)
+}
+
+console.log('== 23. windowsAreDefault 默认等价（旧 Config 的 UTC 窗口 = 内置北京窗口） ==')
+{
+  const zh = parseDeepSeekPricingHtml(readFileSync(new URL('./fixtures/deepseek-pricing-zh-2026-09.html', import.meta.url), 'utf8'))
+  const now = Date.UTC(2026, 8, 11, 13, 52)
+  // 旧版 Config 默认：UTC 窗口 + UTC 时区（无星期几）——语义上等价于官方默认
+  const specLegacy = resolveBillingSpec({ offPeakWindows: '[["01:00","04:00"],["06:00","10:00"]]', offPeakTz: 'UTC' })
+  check('旧默认窗口初始无 days、时区 UTC', specLegacy.peak.windows[0][2] === undefined && specLegacy.peak.tz === 'UTC', specLegacy.peak)
+  applyFetchedPrices(specLegacy, zh, now)
+  check('旧默认窗口被官网窗口覆盖（带工作日）', JSON.stringify(specLegacy.peak.windows[0][2]) === '[1,2,3,4,5]', specLegacy.peak.windows)
+  check('时区同步为 Asia/Shanghai', specLegacy.peak.tz === 'Asia/Shanghai')
+  const sat = priceAt('', 'deepseek-v4-flash', specLegacy, Date.UTC(2026, 7, 29, 2, 0)) // 北京周六 10:00
+  const mon = priceAt('', 'deepseek-v4-flash', specLegacy, Date.UTC(2026, 7, 31, 2, 0)) // 北京周一 10:00
+  check('旧默认窗口下周六 = 空闲 ¥4.5（周末规则生效）', Math.abs(sat.output - 4.5) < 1e-9, sat)
+  check('旧默认窗口下周一 = 高峰 ¥9', Math.abs(mon.output - 9) < 1e-9, mon)
+  // 北京时段但漏写 days 的写法同样视为默认
+  const specBj = resolveBillingSpec({ offPeakWindows: '[["09:00","12:00"],["14:00","18:00"]]', offPeakTz: 'Asia/Shanghai' })
+  applyFetchedPrices(specBj, zh, now)
+  check('北京时段无 days 写法同样视为默认', JSON.stringify(specBj.peak.windows[0][2]) === '[1,2,3,4,5]', specBj.peak.windows)
+  // 真正自定义的窗口不被官网抓取覆盖
+  const specCustom = resolveBillingSpec({ offPeakWindows: '[["22:00","23:00"]]', offPeakTz: 'Asia/Shanghai' })
+  applyFetchedPrices(specCustom, zh, now)
+  check('自定义窗口不被官网覆盖', specCustom.peak.windows.length === 1 && specCustom.peak.windows[0][0] === 1320, specCustom.peak.windows)
+}
+
+console.log('== 24. applyFetchedPrices 写入前归一化（脏 key 不落盘） ==')
+{
+  // 模拟旧版本落进价格缓存的脏 key（官方页脚注污染）
+  const dirty = {
+    currency: 'CNY',
+    flat: {
+      'deepseek-flash(1)': { input: 7, output: 11, cacheRead: 0.07, cacheWrite: 7 },
+      'deepseek-v4-pro(2)': { input: 4.5, output: 13.5, cacheRead: 0.15, cacheWrite: 4.5 },
+    },
+    peak: null,
+  }
+  const spec = resolveBillingSpec({})
+  applyFetchedPrices(spec, dirty, Date.now())
+  const paren = Object.keys(spec.prices).filter((k) => /[()（）]/.test(k))
+  check('全局表无脏 key', paren.length === 0, paren)
+  check('脏 key 归一化进 deepseek-flash', spec.prices['deepseek-flash'] !== undefined && spec.prices['deepseek-flash'].output === 11,
+    spec.prices['deepseek-flash'])
+  check('归一化记录进 fetchedModels', spec.fetchedModels['deepseek-flash'] === true)
+
+  // provider 桶同样归一化，且不污染全局表
+  const specP = resolveBillingSpec({})
+  applyFetchedPrices(specP, dirty, Date.now(), 'mxy')
+  const bucketParen = Object.keys(specP.providerPrices['mxy']).filter((k) => /[()（）]/.test(k))
+  check('provider 桶无脏 key', bucketParen.length === 0 && specP.providerPrices['mxy']['deepseek-flash'] !== undefined, specP.providerPrices['mxy'])
+  check('provider 抓取不写入全局 fetchedModels', specP.fetchedModels['deepseek-flash'] !== true)
+
+  // 历史价格缓存里的脏 key：读取时仍能宽松命中（lookupByModel）
+  const legacyTable = { 'deepseek-flash(1)': { input: 1, output: 4, cacheRead: 0.02, cacheWrite: 1, currency: '¥' } }
+  check('读取历史脏 key 表仍可命中', lookupByModel(legacyTable, 'deepseek-v4-flash-0731') !== undefined)
+  check('priceEntry 兼容历史脏 key', priceEntry('deepseek-v4.1-flash', { prices: legacyTable, fallback: { input: 1, output: 4, cacheRead: 0.02, cacheWrite: 1 }, currency: '¥' }).output === 4)
+}
+
+console.log('== 25. 不跨 provider 串价 + 同名模型各自计价 ==')
+{
+  const at = Date.UTC(2026, 8, 11, 12, 0) // 北京时间 20:00（当前空闲价）
+  const spec = resolveBillingSpec({})
+  applyProviderPrices(spec, 'mxy', { 'deepseek-v4-flash-0731': { input: 3, output: 12, cacheRead: 0.3, cacheWrite: 3, currency: '¥' } })
+  const hitMxy = priceAt('mxy', 'deepseek-v4-flash-0731', spec, at)
+  check('provider 命中用自身价', Math.abs(hitMxy.input - 3) < 1e-9 && Math.abs(hitMxy.output - 12) < 1e-9, hitMxy)
+  const missHy = priceAt('hy', 'deepseek-v4-flash-0731', spec, at)
+  check('provider 未命中不串别的 provider 价（回落官方政策价 ¥4）', Math.abs(missHy.output - 12) > 1e-9 && Math.abs(missHy.output - 4) < 1e-9, missHy)
+  const missEmpty = priceAt('', 'deepseek-v4-flash-0731', spec, at)
+  check('无 provider 回落全局政策价', Math.abs(missEmpty.output - 4) < 1e-9, missEmpty)
+  // 同一模型名在不同 provider 下各按各自价表（大小写/分隔符不敏感）
+  applyProviderPrices(spec, 'hy', { 'DeepSeek-V4-Flash-0731': { input: 5, output: 20, cacheRead: 0.5, cacheWrite: 5, currency: '¥' } })
+  const a = priceAt('mxy', 'deepseek-v4-flash-0731', spec, at)
+  const b = priceAt('hy', 'DeepSeek-V4-Flash-0731', spec, at)
+  check('同名模型不同 provider 各自计价', Math.abs(a.output - 12) < 1e-9 && Math.abs(b.output - 20) < 1e-9, { a, b })
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`)
