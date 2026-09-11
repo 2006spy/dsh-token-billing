@@ -55,7 +55,7 @@ const MIRROR_NAMES = [
   'modelTierMirror',
   'canonicalModelIdMirror',
 ]
-const RUNTIME_NAMES = [...MIRROR_NAMES, 'normalizeModel', 'findPrice']
+const RUNTIME_NAMES = [...MIRROR_NAMES, 'normalizeModel', 'findPrice', 'priceLineParts']
 
 const missing = RUNTIME_NAMES.filter((n) => extractFunction(src, n) === null)
 check(missing.length === 0,
@@ -64,7 +64,7 @@ check(missing.length === 0,
 let client = null
 try {
   const code = RUNTIME_NAMES.map((n) => extractFunction(src, n)).join('\n')
-  client = new Function(code + '\nreturn { stripFootnoteMarksMirror, canonicalModelIdMirror, modelTierMirror, normalizeModel, findPrice }')()
+  client = new Function(code + '\nreturn { stripFootnoteMarksMirror, canonicalModelIdMirror, modelTierMirror, normalizeModel, findPrice, priceLineParts }')()
 } catch (err) {
   check(false, `镜像函数实例化失败：${err.message}`)
 }
@@ -149,6 +149,39 @@ check(client.findPrice('不存在-模型-xyz', rowCanonical) === null,
 
 check(/canonicalModelIdMirror\(prices\[i\]\.model\)/.test(src),
   'lib/client.js 的 findPrice 确实按**双方档位归一化**比较（接线断言）')
+
+/* ------------------------------------------------------------------ */
+/* 4. v0.8.1 行为断言：费用行「当前模型 + 单价」段显示什么              */
+/*    修的是「走全局表（官方定价页）时显示官方档位名」的误导标签：        */
+/*    deepseek-v4.1-flash 曾被显示成 deepseek-flash。                   */
+/* ------------------------------------------------------------------ */
+
+const rowOfficial = { model: 'deepseek-flash', input: 1, output: 4, currency: '¥' }
+
+const p1 = client.priceLineParts('deepseek-v4.1-flash', rowOfficial)
+check(p1.model === 'deepseek-v4.1-flash' && p1.note.includes('deepseek-flash'),
+  `priceLineParts：用户模型(deepseek-v4.1-flash) + 官方档位行走全局表 → 显示用户模型名并附注档位（得到 "${p1.model}" / "${p1.note}"）`)
+
+const p2 = client.priceLineParts('mimo-v2.5', { model: 'mimo-v2.5', output: 0.28, currency: '$' })
+check(p2.model === 'mimo-v2.5' && p2.note === '',
+  `priceLineParts：名称一致时不附注（得到 "${p2.model}" / "${p2.note}"）`)
+
+const p3 = client.priceLineParts('DeepSeek-V4-Flash', { model: 'deepseek-v4-flash', output: 4, currency: '¥' })
+check(p3.model === 'DeepSeek-V4-Flash' && p3.note === '',
+  `priceLineParts：仅大小写/分隔符不同（归一化后同名）不附注（得到 "${p3.model}" / "${p3.note}"）`)
+
+const p4 = client.priceLineParts('', rowOfficial)
+check(p4.model === 'deepseek-flash' && p4.note === '',
+  `priceLineParts：读不到选中模型时回落价目行名且不附注（得到 "${p4.model}" / "${p4.note}"）`)
+
+const p5 = client.priceLineParts('deepseek-v4.1-flash', null)
+check(p5.model === '' && p5.note === '',
+  `priceLineParts：无命中价目时返回空（得到 "${p5.model}" / "${p5.note}"）`)
+
+check(/priceLineParts\(selectedModel, current\)/.test(src),
+  'lib/client.js 的费用行确实调用了 priceLineParts（接线断言，防「实现了没接上」）')
+check(!/current\.model \+ ' ' \+ formatCost/.test(src),
+  'lib/client.js 不再直接渲染 current.model 作为模型名（回归断言）')
 
 console.log(`\n客户端别名镜像一致性：${pass} 通过 / ${fail} 失败`)
 process.exitCode = fail > 0 ? 1 : 0

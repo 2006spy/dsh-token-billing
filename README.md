@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-8A2BE2.svg)](https://github.com/topics/dsh-plugin)
-[![Version](https://img.shields.io/badge/version-0.8.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.8.1-green.svg)](package.json)
 
 </div>
 
@@ -42,6 +42,19 @@
 ---
 
 ## 🛠 更新日志
+
+### v0.8.1（2026-09-12）
+
+**修复：费用行「当前单价」段在走全局价目表时会显示官方档位名，容易被误读为「插件认错了模型」。**
+
+- 该段此前渲染**命中那条价目行的名字**。走全局表（官方定价页）时那个名字是**官方档位名**
+  （如 `deepseek-flash`），于是中转路由下的 `deepseek-v4.1-flash` 会被显示成 `deepseek-flash`。
+- 现改为优先显示**你实际选中的模型名**，仅当它与计价档位名不同时附注：
+  `deepseek-v4.1-flash ¥4/M（按 deepseek-flash 计价）`。
+- **价格本身一直是正确的** —— 档位归一化只影响「匹配哪条价目」，不影响金额。实测：重启后
+  27 条 `deepseek-v4.1-flash @mxy` 记录与官方空闲价重算**逐位吻合（1.0000×）**。本版**仅修显示**。
+- 决策逻辑抽为具名函数 `priceLineParts`，由 `tests/client-alias-parity.mjs` **从源码提取**后断言
+  （5 条行为 + 2 条接线/回归），该测试 **10 → 17 通过**。
 
 ### v0.8.0（2026-09-11）
 
